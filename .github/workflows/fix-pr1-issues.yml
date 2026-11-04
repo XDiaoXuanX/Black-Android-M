@@ -1,0 +1,124 @@
+# .github/workflows/fix-pr1-issues.yml
+#
+# Automates the fixes for issues introduced by PR #1 ("Quality Of Life").
+# Trigger: manual (workflow_dispatch) from the Actions tab.
+#
+# Required permissions: contents:write (push branch), pull-requests:write (open PR).
+# If your repo uses protected branches or restricted Actions, adjust permissions
+# or disable `create_pr` and merge manually.
+
+name: Fix PR #1 Issues
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_branch:
+        description: "Base branch to check out (e.g. main, master)"
+        required: true
+        default: "main"
+      branch_name:
+        description: "Name for the fix branch to create"
+        required: true
+        default: "fix/pr1-issues"
+      create_pr:
+        description: "Create a pull request automatically"
+        type: boolean
+        required: true
+        default: true
+      dry_run:
+        description: "Only preview changes (do not commit/push)"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  apply-fixes:
+    name: Apply PR #1 fixes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_branch }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Apply fixes (dry-run)
+        if: inputs.dry_run
+        run: python3 scripts/fix_pr1_issues.py --dry-run --verify || true
+
+      - name: Apply fixes
+        if: ${{ !inputs.dry_run }}
+        run: python3 scripts/fix_pr1_issues.py
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create pull request
+        if: steps.diff.outputs.changed == 'true' && !inputs.dry_run && inputs.create_pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          base: ${{ inputs.base_branch }}
+          branch: ${{ inputs.branch_name }}
+          delete-branch: true
+          commit-message: "fix(native): resolve issues from PR #1"
+          title: "fix(native): resolve issues from PR #1"
+          body: |
+            Automated fixes for issues introduced by PR #1 (`Quality Of Life`).
+
+            ### Fixes applied
+            - `native/game_files.cpp` :: `RemovableFolders` — removed duplicate `out` / `ec` declarations and duplicate `if` check
+            - `native/dynamic_resolution.cpp` — replaced invalid `std::chrono::duration(el)` with `duration_cast<duration<float>>(el)`
+            - `native/update.cpp` :: `CheckForUpdates` — removed duplicate definition (would be a redefinition compile error)
+            - `native/update.cpp` :: `WithActivity` — removed duplicate `jmethodID m` declaration
+            - `native/game_files.cpp` :: `AskOtherRelease` — removed duplicate `SDL_MessageBoxData box`
+            - `native/game_files.cpp` :: `ActivityCardFolders` — removed invalid `env->DeleteLocalRef(activity)` on non-owned reference
+            - `native/input.cpp` :: `OnEvent` — collapsed duplicated gyro/touch guard
+
+            > Generated automatically by `.github/workflows/fix-pr1-issues.yml`.
+          labels: |
+            fix
+            automated
+
+      - name: Push branch (when create_pr = false)
+        if: steps.diff.outputs.changed == 'true' && !inputs.dry_run && !inputs.create_pr
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${{ inputs.branch_name }}"
+          git add -A
+          git commit -m "fix(native): resolve issues from PR #1"
+          git push --force-with-lease origin "${{ inputs.branch_name }}"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Fix PR #1 Issues"
+            echo ""
+            echo "| Key | Value |"
+            echo "| --- | --- |"
+            echo "| Base branch | \`${{ inputs.base_branch }}\` |"
+            echo "| Fix branch  | \`${{ inputs.branch_name }}\` |"
+            echo "| Dry run     | \`${{ inputs.dry_run }}\` |"
+            echo "| Changes     | \`${{ steps.diff.outputs.changed }}\` |"
+            echo ""
+            echo "### Diff"
+            echo '```diff'
+            git --no-pager diff || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
